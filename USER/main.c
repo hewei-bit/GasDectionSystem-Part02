@@ -16,7 +16,7 @@
 #include "oled.h"
 #include "key.h"
 #include "rtc.h"
-
+#include "lcd.h"
 
 
 /****************************************************************
@@ -27,11 +27,16 @@
 *当前日期:2020/12/24 完成V2.0
 *当前日期:2021/01/08 完成V3.0
 *当前日期:2021/03/09 完成V4.0
+*当前日期:2021/03/10 完成定点检测节点代码
+*当前日期:2021/03/11 完成遥测检测节点代码
+*当前日期:2021/03/12 完成中继节点代码
+
+
 
 *任务：
 	1.开始任务 创建信号量 消息队列 互斥锁 事件标志组 任务
-	2.DHT11温湿度采集,单总线采集，  	互斥锁 oled显示		数据通过消息队列发送数据到线程存储、转发任务
-	3.TDLAS气体浓度采集，串口接收浓度数据，互斥锁 oled显示	数据通过消息队列发送数据到线程存储、转发任务        
+	2.DHT11温湿度采集,单总线采集，  	互斥锁 lcd显示		数据通过消息队列发送数据到线程存储、转发任务
+	3.TDLAS气体浓度采集，串口接收浓度数据，互斥锁 lcd显示	数据通过消息队列发送数据到线程存储、转发任务        
 	4.MQ135 浓度采集
 	5.MQ4 浓度采集
 	6.看门狗
@@ -43,7 +48,8 @@
 	12.BEEP 信号量接受数据 报警
 	13.KEY 
 	14.任务状态
-	
+	15.系统运行检查
+	16.mpu6050 六轴传感器 显示当前云台角度数据 
 	
 *说  明:		
 	当前代码尽可能实现了模块化编程，一个任务管理一个硬件。最简单的
@@ -51,7 +57,7 @@
 *****************************************************************/
 
 //V1.0 完成任务和内核创建 传感器数据采集 json数据封装
-//V2.0 完成OLED显示 串口响应  LORA任务中dht11和TDLAS的消息队列传输
+//V2.0 完成lcd显示 串口响应  LORA任务中dht11和TDLAS的消息队列传输
 //V3.0 完成上位机对下位机的数据问询
 //V4.0 完成lora信息传输 
 
@@ -226,7 +232,7 @@ NODE node_1;
 //节点初始化
 void node_init(void)
 {
-	node_1.device_id = 1;
+	node_1.device_id = 6;
 	node_1.lora_address = My_LoRa_CFG.addr;
 	node_1.lora_channel = My_LoRa_CFG.chn;
 	strcpy(node_1.temperature,"25.0");
@@ -271,11 +277,9 @@ void oled_showString_safe(int x,int y,char *string,int size,OS_ERR err)
 int main(void)
 {
 	OS_ERR err;
-	char node_message[16] = {0};
+	char node_message_1[16] = {0};
+	char node_message_2[16] = {0};
 	CPU_SR_ALLOC();
-	
-	
-	
 	
 	node_init();		//node结构体初始化
 	
@@ -305,14 +309,23 @@ int main(void)
 	}
 	mq135_init();		//mq135初始化
 	
-	
+#if 0 
+	//遥测模块使用lcd屏进行显示，oled使用的串口留给mpu6050使用
 	OLED_Init();		//初始化OLED
 	start_oled_ui();	//oled初始化配置
-	sprintf(node_message,"CHN:%d ADDR:%d",My_LoRa_CFG.chn,My_LoRa_CFG.addr);
+	sprintf(node_message_2,"CHN:%d ADDR:%d",My_LoRa_CFG.chn,My_LoRa_CFG.addr);
 	OLED_ShowString(0,0,(uint8_t *)node_message,16);	
+#endif
+	
+	LCD_Init();			//初始化LCD 
+	sprintf(node_message_2,"CHN:%d ADDR:%d",My_LoRa_CFG.chn,My_LoRa_CFG.addr);
+	sprintf(node_message_1,"Node ID:%d",node_1.device_id);
+	LCD_ShowString(30,50,200,24,24,(u8 *)node_message_1);
+	LCD_ShowString(30,80,200,24,24,(u8 *)node_message_2);
+
+	
 	
 	RTC_Init();
-
 	
 	OSInit(&err);		//初始化UCOSIII
 	OS_CRITICAL_ENTER();//进入临界区
@@ -602,11 +615,13 @@ void DHT11_task(void *p_arg)
 	//DHT11 温湿度
 	uint8_t dht11_data[5] = {0};
 	char buf[16] = {0};
+	uint8_t temp_buf[16];
+	uint8_t humi_buf[16];
 	//调试
 	dgb_printf_safe("DHT11 task running\r\n");
 	
-	//LCD_ShowString(30,130,200,16,16,"DHT11 OK");
-	//POINT_COLOR=BLUE;//设置字体为蓝色 
+	//LCD_ShowString(30,110,200,24,24,(u8 *)"DHT11 OK");
+	POINT_COLOR=BLUE;//设置字体为蓝色 
 	
 	while(1)
 	{
@@ -615,32 +630,24 @@ void DHT11_task(void *p_arg)
 		
 		//组合词条
 		sprintf((char *)buf,"T:%02d.%dC H:%02d.%d%%",dht11_data[2],dht11_data[3],dht11_data[0],dht11_data[1]);
+		sprintf((char *)temp_buf,"Temp:%02d.%dC",dht11_data[2],dht11_data[3]);
+		sprintf((char *)humi_buf,"Humi:%02d.%d%%",dht11_data[0],dht11_data[1]);
 		
 		//赋值结构体
 		OSMutexPend(&g_mutex_DHT11,0,OS_OPT_PEND_BLOCKING,NULL,&err);	
-		sprintf((char *)temp_buf,"%02d.%d",dht11_data[2],dht11_data[3]);
 		sprintf((char *)node_1.temperature,"%02d.%d",dht11_data[2],dht11_data[3]);
 		sprintf((char *)node_1.humidity,"%02d.%d",dht11_data[0],dht11_data[1]);
 		OSMutexPost(&g_mutex_DHT11,OS_OPT_POST_NONE,&err);
 		
-		//OLED显示
-		OSMutexPend(&g_mutex_oled,0,OS_OPT_PEND_BLOCKING,NULL,&err);	
-		OLED_ShowString(0,2,(uint8_t *)buf,16);		
-		OSMutexPost(&g_mutex_oled,OS_OPT_POST_NONE,&err);
+		//LCD显示
+		OSMutexPend(&g_mutex_lcd,0,OS_OPT_PEND_BLOCKING,NULL,&err);
+		LCD_ShowString(30,150,100,24,24,temp_buf);
+		LCD_ShowString(30,180,100,24,24,humi_buf);
+		OSMutexPost(&g_mutex_lcd,OS_OPT_NONE,&err);		
 		
-		
-#if 1
 		//调试专用
 		//发送至usart1,进行调试
-		dgb_printf_safe("%s\r\n",buf);
-		//dgb_printf_safe("%s\r\n",temp_buf);
-		//dgb_printf_safe("%s\r\n",node_1.temperature);
-		//dgb_printf_safe("%c",temp_buf[0]);
-		//dgb_printf_safe("%c",temp_buf[1]);
-		//dgb_printf_safe("%c",temp_buf[2]);
-		//dgb_printf_safe("%c\r\n",temp_buf[3]);
-		//dgb_printf_safe("%s\r\n",humi_buf);
-#endif 
+		//dgb_printf_safe("%s\r\n",buf);
 		
 #if 0	
 		//消息队列
@@ -688,41 +695,14 @@ void TDLAS_task(void *p_arg)
 	
 	//最终输出
 	char Fix_result[20] = {0};
-	char telemetry_result_light[20] = {0};
-	char telemetry_result_CH4[20] = {0};
+	char telemetry_result_light[20] = "Light: 00";
+	char telemetry_result_CH4[20] = "CH4(TDLAS): 00000";
 	
 	
 	dgb_printf_safe("TDLAS task running\r\n");
 	
 	while(1)
 	{	
-
-#if 0
-		//测试代码	
-		if(flag){
-			concen += 100;
-		}
-		else{
-			concen -= 100;
-		}
-		
-		if (concen > 500 || concen < 0)
-		{
-			flag = ~flag;
-		}	
-		//赋值TDLAS
-		OSMutexPend(&g_mutex_TDLAS,0,OS_OPT_PEND_BLOCKING,NULL,&err);	
-			sprintf(TDLAS,"%d",concen);
-		OSMutexPost(&g_mutex_TDLAS,OS_OPT_POST_NONE,&err);
-		
-		//OLED显示
-		OSMutexPend(&g_mutex_oled,0,OS_OPT_PEND_BLOCKING,NULL,&err);
-			sprintf(result,"TDLAS: %d ppm",x);
-			OLED_ShowString(0,4,(uint8_t *)result,20);
-		OSMutexPost(&g_mutex_oled,OS_OPT_NONE,&err);	
-#endif		
-	
-#if 1	
 		//等待消息队列
 		TDLAS_res = OSQPend((OS_Q*			)&g_queue_usart2,
 							(OS_TICK		)0,
@@ -758,21 +738,29 @@ void TDLAS_task(void *p_arg)
 		//dgb_printf_safe(" %s \r\n",gq_str);
 		gq_val = atoi(gq_str);
 		//dgb_printf_safe("Light intensity : %d \r\n",gq_val);
-		sprintf(telemetry_result_light,"Light: %d",gq_val);
+		//sprintf(telemetry_result_light,"Light: %d",gq_val);
+		telemetry_result_light[7] = gq_str[0];
+		telemetry_result_light[8] = gq_str[1];
 		
 		//浓度部分转换
 		strncpy(nd_str, TDLAS+21, 5);
 		//dgb_printf_safe(" %s \r\n",nd_str);
 		nd_val = atoi(nd_str);
 		//dgb_printf_safe("CH4 concentration : %d \r\n",nd_val);
-		sprintf(telemetry_result_CH4,"CH4: %d",nd_val);
+		//sprintf(telemetry_result_CH4,"CH4: %d",nd_val);
+		telemetry_result_CH4[12] = nd_str[0];
+		telemetry_result_CH4[13] = nd_str[1];
+		telemetry_result_CH4[14] = nd_str[2];
+		telemetry_result_CH4[15] = nd_str[3];
+		telemetry_result_CH4[16] = nd_str[4];
+
+
+		//在LCD上显示
+		OSMutexPend(&g_mutex_lcd,0,OS_OPT_PEND_BLOCKING,NULL,&err);
+		LCD_ShowString(30,210,200,24,24,(u8 *)telemetry_result_light);
+		LCD_ShowString(30,240,200,24,24,(u8 *)telemetry_result_CH4);
+		OSMutexPost(&g_mutex_lcd,OS_OPT_NONE,&err);	
 		
-		
-		//在OLED上显示
-		OSMutexPend(&g_mutex_oled,0,OS_OPT_PEND_BLOCKING,NULL,&err);
-		OLED_ShowString(0,4,(uint8_t *)telemetry_result_CH4,16);
-		OLED_ShowString(56,4,(uint8_t *)telemetry_result_light,16);
-		OSMutexPost(&g_mutex_oled,OS_OPT_NONE,&err);
 #endif
 
 #if 0		
@@ -785,10 +773,35 @@ void TDLAS_task(void *p_arg)
 		OSMutexPend(&g_mutex_oled,0,OS_OPT_PEND_BLOCKING,NULL,&err);	
 		OLED_ShowString(0,4,(uint8_t *)Fix_result,20);
 		OSMutexPost(&g_mutex_oled,OS_OPT_NONE,&err);
-
 #endif
 
-#endif 
+#if 0
+		//测试代码	
+		if(flag){
+			concen += 100;
+		}
+		else{
+			concen -= 100;
+		}
+		
+		if (concen > 500 || concen < 0)
+		{
+			flag = ~flag;
+		}	
+		//赋值TDLAS
+		OSMutexPend(&g_mutex_TDLAS,0,OS_OPT_PEND_BLOCKING,NULL,&err);	
+			sprintf(TDLAS,"%d",concen);
+		OSMutexPost(&g_mutex_TDLAS,OS_OPT_POST_NONE,&err);
+		
+		//OLED显示
+		OSMutexPend(&g_mutex_oled,0,OS_OPT_PEND_BLOCKING,NULL,&err);
+			sprintf(result,"TDLAS: %d ppm",x);
+			OLED_ShowString(0,4,(uint8_t *)result,20);
+		OSMutexPost(&g_mutex_oled,OS_OPT_NONE,&err);
+
+
+#endif		
+	
 		//延时发生任务调度
 		delay_ms(1000);
 	}
@@ -865,13 +878,22 @@ void MQ4_task(void *parg)
 		
 		
 		//组合词条
-		sprintf((char *)MQ4,"CH4:%2.3f ppm ",CH4_ppm);
+		sprintf(MQ4,"CH4(MQ4): %2.3fppm ",CH4_ppm);
 
+#if 0
 	 	//OLED显示浓度
-//		OSMutexPend(&g_mutex_oled,0,OS_OPT_PEND_BLOCKING,NULL,&err);	
-//		OLED_ShowString(0,4,(uint8_t *)MQ4,16);
-//		OSMutexPost(&g_mutex_oled,OS_OPT_POST_NONE,&err);
-
+		OSMutexPend(&g_mutex_oled,0,OS_OPT_PEND_BLOCKING,NULL,&err);	
+		OLED_ShowString(0,4,(uint8_t *)MQ4,16);
+		OSMutexPost(&g_mutex_oled,OS_OPT_POST_NONE,&err);
+#endif
+		
+		//在LCD上显示
+		OSMutexPend(&g_mutex_lcd,0,OS_OPT_PEND_BLOCKING,NULL,&err);
+		LCD_ShowString(30,270,220,24,24,(u8 *)MQ4);
+		OSMutexPost(&g_mutex_lcd,OS_OPT_NONE,&err);	
+		
+		
+		
 		//延时发生任务调度
 		delay_ms(2000);
 	}
