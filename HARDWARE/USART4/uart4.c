@@ -21,42 +21,42 @@ void uart4_init(u32 bound)
     USART_InitTypeDef USART_InitStructure;
     NVIC_InitTypeDef NVIC_InitStructure;
 
-    RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOC, ENABLE); //使能GPIOA时钟
-    RCC_APB1PeriphClockCmd(RCC_APB1Periph_UART4, ENABLE); //使能USART1时钟
+    RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOC, ENABLE); //使能GPIOC时钟
+    RCC_APB1PeriphClockCmd(RCC_APB1Periph_UART4, ENABLE); //使能UART4时钟
+	RCC_APB2PeriphClockCmd(RCC_APB2Periph_AFIO,ENABLE);
+	
 
-    //串口1对应引脚复用映射
-    GPIO_PinAFConfig(GPIOC, GPIO_PinSource11, GPIO_AF_UART4); //GPIOB11复用为UART4
-    GPIO_PinAFConfig(GPIOC, GPIO_PinSource10, GPIO_AF_UART4); //GPIOB10复用为UART4
+    //USART4端口配置GPIOC11和GPIOC10初始化
+    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_10;
+    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF_PP;         //复用推挽输出
+    GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;       //速度50MHz
+    GPIO_Init(GPIOC, &GPIO_InitStructure);               	// 初始化GPIOC10   
 
-    //USART1端口配置
-    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_11 | GPIO_Pin_10; //GPIOB11和GPIOB10初始化
-    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF;             //复用功能
-    GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;        //速度50MHz
-    GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;           //推挽复用输出
-    GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_UP;             //上拉
-    GPIO_Init(GPIOC, &GPIO_InitStructure);                   //初始化GPIOB11，和GPIOB10
+	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_11;
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IN_FLOATING; 
+	GPIO_Init(GPIOC, &GPIO_InitStructure);        			//初始化GPIOC11  
 
-    //USART1 初始化设置
+	//Usart4 NVIC 配置
+    NVIC_InitStructure.NVIC_IRQChannel = UART4_IRQn;
+    NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 2; //抢占优先级2
+    NVIC_InitStructure.NVIC_IRQChannelSubPriority = 2;        //子优先级2
+    NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;           //IRQ通道使能
+    NVIC_Init(&NVIC_InitStructure);                           //根据指定的参数初始化VIC寄存器
+    
+	
+	//USART4 初始化设置
     USART_InitStructure.USART_BaudRate = bound;                                     //波特率
     USART_InitStructure.USART_WordLength = USART_WordLength_8b;                     //字长为8位数据格式
     USART_InitStructure.USART_StopBits = USART_StopBits_1;                          //一个停止位
     USART_InitStructure.USART_Parity = USART_Parity_No;                             //无奇偶校验位
     USART_InitStructure.USART_HardwareFlowControl = USART_HardwareFlowControl_None; //无硬件数据流控制
     USART_InitStructure.USART_Mode = USART_Mode_Rx | USART_Mode_Tx;                 //收发模式
-    USART_Init(UART4, &USART_InitStructure);                                        //初始化串口3
-
-    USART_Cmd(UART4, ENABLE); //使能串口1
-
-    //USART_ClearFlag(USART1, USART_FLAG_TC);
-
+    
+	
+	USART_Init(UART4, &USART_InitStructure);                                        //初始化串口4
     USART_ITConfig(UART4, USART_IT_RXNE, ENABLE); //开启中断
-
-    //Usart1 NVIC 配置
-    NVIC_InitStructure.NVIC_IRQChannel = UART4_IRQn;
-    NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 2; //抢占优先级2
-    NVIC_InitStructure.NVIC_IRQChannelSubPriority = 2;        //子优先级3
-    NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;           //IRQ通道使能
-    NVIC_Init(&NVIC_InitStructure);                           //根据指定的参数初始化VIC寄存器
+	USART_Cmd(UART4, ENABLE); //使能串口4
+	USART_ClearFlag(UART4,USART_FLAG_TC);
 }
 
 void UART4_IRQHandler(void) //串口1中断服务程序
@@ -94,7 +94,28 @@ void UART4_IRQHandler(void) //串口1中断服务程序
             }
         }
     }
+#if 0  //发送消息队列	
+	if(UART4_RX_STA&0x8000)
+	{
+		len=UART4_RX_STA&0x3FFF;//得到此次接收数据的长度
+		printf("TDLAS:%s\r\n",UART4_RX_BUF);
+	
+
+		OSQPost((OS_Q*		)&g_queue_usart1,
+				(void *     )UART4_RX_BUF,
+				(OS_MSG_SIZE)len,
+				(OS_OPT		)OS_OPT_POST_FIFO,
+				(OS_ERR*	)&err);
+		if(err != OS_ERR_NONE)
+		{
+			printf("[UART4_IRQHandler]OSQPost error code %d\r\n",err);
+		}
+	}
+#endif	
 }
+
+
+
 void u4_printf(char *fmt, ...)
 {
     u16 i, j;
@@ -105,8 +126,7 @@ void u4_printf(char *fmt, ...)
     i = strlen((const char *)UART4_TX_BUF); //此次发送数据的长度
     for (j = 0; j < i; j++)                 //循环发送数据
     {
-        while (USART_GetFlagStatus(UART4, USART_FLAG_TC) == RESET)
-            ;                                            //等待上次传输完成
-        USART_SendData(UART4, (uint8_t)UART4_TX_BUF[j]); //发送数据到串口3
+        while (USART_GetFlagStatus(UART4, USART_FLAG_TC) == RESET);   	//等待上次传输完成
+        USART_SendData(UART4, (uint8_t)UART4_TX_BUF[j]); 				//发送数据到串口3
     }
 }

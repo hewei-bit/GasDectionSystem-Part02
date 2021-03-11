@@ -15,13 +15,13 @@
 //////////////////////////////////////////////////////////////////////////////////
  	   		   
 //IO方向设置
-#define MPU_SDA_IN()  {GPIOB->CRH&=0XFFFF0FFF;GPIOB->CRH|=8<<12;}
-#define MPU_SDA_OUT() {GPIOB->CRH&=0XFFFF0FFF;GPIOB->CRH|=3<<12;}
+#define MPU_SDA_IN()  {GPIOB->CRL&=0X0FFFFFFF;GPIOB->CRL|=8<<28;}
+#define MPU_SDA_OUT() {GPIOB->CRL&=0X0FFFFFFF;GPIOB->CRL|=3<<28;}
 
 //IO操作函数	 
-#define MPU_IIC_SCL    PBout(10) 		//SCL
-#define MPU_IIC_SDA    PBout(11) 		//SDA	 
-#define MPU_READ_SDA   PBin(11) 		//输入SDA 
+#define MPU_IIC_SCL    PBout(6) 		//SCL
+#define MPU_IIC_SDA    PBout(7) 		//SDA	 
+#define MPU_READ_SDA   PBin(7) 		//输入SDA 
 
 //IIC所有操作函数
 void MPU_IIC_Delay(void);				//MPU IIC延时函数

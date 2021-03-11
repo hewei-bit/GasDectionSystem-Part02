@@ -100,17 +100,11 @@ void USART2_IRQHandler(void) //串口2中断服务程序
         }
     }
 
-    if (USART2_RX_STA & 0x8000)
-    {
-        len = USART2_RX_STA & 0x3FFF; //得到此次接收数据的长度
-        //		for(t=0;t<len;t++)
-        //		{
-        //			USART_SendData(USART1, USART2_RX_BUF[t]);//向串口1发送数据
-        //			while(USART_GetFlagStatus(USART1,USART_FLAG_TC)!=SET);//等待发送结束
-        //		}
-        //		printf("TDLAS:%s\r\n",USART2_RX_BUF);
-
 #if 1 //发送消息队列
+    if (USART2_RX_STA & 0x8000)
+    {     
+		//dgb_printf_safe("TDLAS:%s\r\n",USART2_RX_BUF);
+		len = USART2_RX_STA & 0x3FFF; //得到此次接收数据的长度
         OSQPost((OS_Q *)&g_queue_usart2,
                 (void *)USART2_RX_BUF,
                 (OS_MSG_SIZE)len,
@@ -118,15 +112,17 @@ void USART2_IRQHandler(void) //串口2中断服务程序
                 (OS_ERR *)&err);
         if (err != OS_ERR_NONE)
         {
-            printf("[USART2_IRQHandler]OSQPost error code %d\r\n", err);
-        }
-#endif
+            dgb_printf_safe("[USART2_IRQHandler]OSQPost error code %d\r\n", err);
+        }	
     }
-
+#endif
+	
 #ifdef SYSTEM_SUPPORT_OS
     OSIntExit();
 #endif
 }
+
+
 void u2_printf(char *fmt, ...)
 {
     u16 i, j;
