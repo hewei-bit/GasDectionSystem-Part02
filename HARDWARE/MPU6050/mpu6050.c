@@ -142,7 +142,7 @@ u8 MPU_Get_Accelerometer(short *ax,short *ay,short *az)
 		*ay=((u16)buf[2]<<8)|buf[3];  
 		*az=((u16)buf[4]<<8)|buf[5];
 	} 	
-    return res;;
+    return res;
 }
 //IIC连续写
 //addr:器件地址 

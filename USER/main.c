@@ -17,7 +17,9 @@
 #include "key.h"
 #include "rtc.h"
 #include "lcd.h"
-
+#include "mpu6050.h"
+#include "inv_mpu.h"
+#include "inv_mpu_dmp_motion_driver.h" 
 
 /****************************************************************
 *名    称:输气站场气体泄漏检测系统
@@ -162,7 +164,16 @@ OS_TCB KEY_Task_TCB;
 CPU_STK KEY_TASK_STK[KEY_STK_SIZE];
 void KEY_task(void *p_arg);
 
-//任务14.任务状态
+//任务14 MPU6050
+#define MPU6050_TASK_PRIO		14
+#define MPU6050_STK_SIZE		128
+OS_TCB	Mpu6050TaskTCB;
+__align(8) CPU_STK	MPU6050_TASK_STK[MPU6050_STK_SIZE];
+void mpu6050_task(void *p_arg);
+
+
+
+//任务15.任务状态
 #define TASK_STA_TASK_PRIO		20
 #define TASK_STA_STK_SIZE		128
 OS_TCB	TASK_STA_Task_TCB;
@@ -170,7 +181,7 @@ CPU_STK	TASK_STA_TASK_STK[TASK_STA_STK_SIZE];
 void TASK_STA_task(void *p_arg);
 
 
-//任务15 任务运行提示
+//任务16 任务运行提示
 #define FLOAT_TASK_PRIO		21
 #define FLOAT_STK_SIZE		128
 OS_TCB	FloatTaskTCB;
@@ -259,15 +270,25 @@ void dgb_printf_safe(const char *format, ...)
 	(void)0;
 #endif
 }
-
-void oled_showString_safe(int x,int y,char *string,int size,OS_ERR err)
+//关闭，打开中断
+static void NVIC_Usart2_Disable()
 {
-	OSMutexPend(&g_mutex_oled,0,OS_OPT_PEND_BLOCKING,NULL,&err);
-		sprintf(string,"TDLAS: %d",x);
-		OLED_ShowString(x,y,(uint8_t *)string,size);
-	OSMutexPost(&g_mutex_oled,OS_OPT_NONE,&err);
+	NVIC_InitTypeDef NVIC_InitStructure;
+    NVIC_InitStructure.NVIC_IRQChannel = USART2_IRQn;
+    NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 3; //抢占优先级3
+    NVIC_InitStructure.NVIC_IRQChannelSubPriority = 3;        //子优先级3
+    NVIC_InitStructure.NVIC_IRQChannelCmd = DISABLE;           //IRQ通道使能
+    NVIC_Init(&NVIC_InitStructure); 
 }
-
+static void NVIC_Usart2_Enable()
+{
+	NVIC_InitTypeDef NVIC_InitStructure;
+    NVIC_InitStructure.NVIC_IRQChannel = USART2_IRQn;
+    NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 3; //抢占优先级3
+    NVIC_InitStructure.NVIC_IRQChannelSubPriority = 3;        //子优先级3
+    NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;           //IRQ通道使能
+    NVIC_Init(&NVIC_InitStructure); 
+}
 
 /*******************************************
 		1.硬件初始化
@@ -288,6 +309,7 @@ int main(void)
 	
 	uart_init(115200);    	//串口波特率设置
 	usart2_init(115200);    //串口波特率设置
+	NVIC_Usart2_Disable();
 	uart4_init(115200);    	//串口波特率设置
 
 	while(LoRa_Init())		//初始化ATK-LORA-01模块
@@ -309,24 +331,32 @@ int main(void)
 	}
 	mq135_init();		//mq135初始化
 	
-#if 0 
-	//遥测模块使用lcd屏进行显示，oled使用的串口留给mpu6050使用
-	OLED_Init();		//初始化OLED
-	start_oled_ui();	//oled初始化配置
-	sprintf(node_message_2,"CHN:%d ADDR:%d",My_LoRa_CFG.chn,My_LoRa_CFG.addr);
-	OLED_ShowString(0,0,(uint8_t *)node_message,16);	
-#endif
-	
 	LCD_Init();			//初始化LCD 
+	POINT_COLOR=RED;			//设置字体为红色 
+	//模块损坏
+//	MPU_Init();			//初始化MPU6050
+//	while(mpu_dmp_init())
+//	{
+//		LCD_ShowString(30,20,200,16,16,"MPU6050 Error");
+//		delay_ms(500);
+//		LCD_Fill(30,130,239,130+16,WHITE);
+//		delay_ms(500);
+//	}  
+	
+	//显示设备ID
 	sprintf(node_message_2,"CHN:%d ADDR:%d",My_LoRa_CFG.chn,My_LoRa_CFG.addr);
 	sprintf(node_message_1,"Node ID:%d",node_1.device_id);
 	LCD_ShowString(30,50,200,24,24,(u8 *)node_message_1);
 	LCD_ShowString(30,80,200,24,24,(u8 *)node_message_2);
-
 	
-	
+	//RTC初始化
 	RTC_Init();
-	
+
+	//其余硬件初始化完成，
+	NVIC_Usart2_Enable();
+
+
+
 	OSInit(&err);		//初始化UCOSIII
 	OS_CRITICAL_ENTER();//进入临界区
 	//创建开始任务
@@ -571,8 +601,23 @@ void start_task(void *p_arg)
                  (void   	* )0,				
                  (OS_OPT      )OS_OPT_TASK_STK_CHK|OS_OPT_TASK_STK_CLR, 
                  (OS_ERR 	* )&err);	
+	
+	//14.创建MPU6050任务
+	OSTaskCreate((OS_TCB 	* )&Mpu6050TaskTCB,		
+				 (CPU_CHAR	* )"MPU6050 task", 		
+                 (OS_TASK_PTR )mpu6050_task, 			
+                 (void		* )0,					
+                 (OS_PRIO	  )MPU6050_TASK_PRIO,     	
+                 (CPU_STK   * )&MPU6050_TASK_STK[0],	
+                 (CPU_STK_SIZE)MPU6050_STK_SIZE/10,	
+                 (CPU_STK_SIZE)MPU6050_STK_SIZE,		
+                 (OS_MSG_QTY  )0,					
+                 (OS_TICK	  )0,					
+                 (void   	* )0,				
+                 (OS_OPT      )OS_OPT_TASK_STK_CHK|OS_OPT_TASK_STK_CLR, 
+                 (OS_ERR 	* )&err);
 				 
-	//14.创建TASK_STA任务
+	//15.创建TASK_STA任务
 	OSTaskCreate((OS_TCB 	* )&TASK_STA_Task_TCB,		
 				 (CPU_CHAR	* )"TASK_STA task", 		
                  (OS_TASK_PTR )TASK_STA_task, 			
@@ -587,7 +632,7 @@ void start_task(void *p_arg)
                  (OS_OPT      )OS_OPT_TASK_STK_CHK|OS_OPT_TASK_STK_CLR, 
                  (OS_ERR 	* )&err);
 				 
-	//15.创建浮点测试任务
+	//16.创建浮点测试任务
 	OSTaskCreate((OS_TCB 	* )&FloatTaskTCB,		
 				 (CPU_CHAR	* )"float test task", 		
                  (OS_TASK_PTR )float_task, 			
@@ -703,6 +748,35 @@ void TDLAS_task(void *p_arg)
 	
 	while(1)
 	{	
+		
+#if 0
+		//测试代码	
+		if(flag){
+			concen += 100;
+		}
+		else{
+			concen -= 100;
+		}
+		
+		if (concen > 500 || concen < 0)
+		{
+			flag = ~flag;
+		}	
+		//赋值TDLAS
+		OSMutexPend(&g_mutex_TDLAS,0,OS_OPT_PEND_BLOCKING,NULL,&err);	
+			sprintf(TDLAS,"%d",concen);
+		OSMutexPost(&g_mutex_TDLAS,OS_OPT_POST_NONE,&err);
+		
+		//OLED显示
+		OSMutexPend(&g_mutex_oled,0,OS_OPT_PEND_BLOCKING,NULL,&err);
+			sprintf(result,"TDLAS: %d ppm",x);
+			OLED_ShowString(0,4,(uint8_t *)result,20);
+		OSMutexPost(&g_mutex_oled,OS_OPT_NONE,&err);
+#endif		
+		
+		
+		
+		
 		//等待消息队列
 		TDLAS_res = OSQPend((OS_Q*			)&g_queue_usart2,
 							(OS_TICK		)0,
@@ -717,7 +791,7 @@ void TDLAS_task(void *p_arg)
 		}
 		
 		//转换TDLAS数值，并合成输出字符串
-		OSMutexPend(&g_mutex_TDLAS,0,OS_OPT_PEND_BLOCKING,NULL,&err);
+		//OSMutexPend(&g_mutex_TDLAS,0,OS_OPT_PEND_BLOCKING,NULL,&err);
 		if(USART2_RX_STA&0x8000)
 		{                                           
 			int len=USART2_RX_STA&0x3FFF;//得到此次接收数据的长度
@@ -730,7 +804,7 @@ void TDLAS_task(void *p_arg)
 			//dgb_printf_safe("TDLAS:%s\r\n",TDLAS);
 			USART2_RX_STA = 0;
 		}	
-		
+		//OSMutexPost(&g_mutex_TDLAS,OS_OPT_POST_NONE,&err);
 #if 1		
 		//遥测模块需要截取字符串
 		//光照强度部分转换
@@ -765,6 +839,7 @@ void TDLAS_task(void *p_arg)
 
 #if 0		
 		//定点模块直接转换即可
+		OSMutexPend(&g_mutex_TDLAS,0,OS_OPT_PEND_BLOCKING,NULL,&err);
 		concen = atoi(TDLAS);
 		sprintf(Fix_result,"TDLAS: %d ppm",concen);	
 		OSMutexPost(&g_mutex_TDLAS,OS_OPT_POST_NONE,&err);
@@ -775,32 +850,7 @@ void TDLAS_task(void *p_arg)
 		OSMutexPost(&g_mutex_oled,OS_OPT_NONE,&err);
 #endif
 
-#if 0
-		//测试代码	
-		if(flag){
-			concen += 100;
-		}
-		else{
-			concen -= 100;
-		}
-		
-		if (concen > 500 || concen < 0)
-		{
-			flag = ~flag;
-		}	
-		//赋值TDLAS
-		OSMutexPend(&g_mutex_TDLAS,0,OS_OPT_PEND_BLOCKING,NULL,&err);	
-			sprintf(TDLAS,"%d",concen);
-		OSMutexPost(&g_mutex_TDLAS,OS_OPT_POST_NONE,&err);
-		
-		//OLED显示
-		OSMutexPend(&g_mutex_oled,0,OS_OPT_PEND_BLOCKING,NULL,&err);
-			sprintf(result,"TDLAS: %d ppm",x);
-			OLED_ShowString(0,4,(uint8_t *)result,20);
-		OSMutexPost(&g_mutex_oled,OS_OPT_NONE,&err);
-
-
-#endif		
+	
 	
 		//延时发生任务调度
 		delay_ms(1000);
@@ -1218,7 +1268,87 @@ void KEY_task(void *p_arg)
 	}
 }
 	
-//任务14.系统内存占用监视
+
+//任务14 MPU6050
+//aacx,aacy,aacz:x,y,z三个方向上面的加速度值
+//gyrox,gyroy,gyroz:x,y,z三个方向上面的陀螺仪值
+//roll:横滚角.单位0.01度。 -18000 -> 18000 对应 -180.00  ->  180.00度
+//pitch:俯仰角.单位 0.01度。-9000 - 9000 对应 -90.00 -> 90.00 度
+//yaw:航向角.单位为0.1度 0 -> 3600  对应 0 -> 360.0度
+void mpu6050_task(void *p_arg)
+{
+	OS_ERR err; 
+	CPU_SR_ALLOC();
+	int res = 0;
+	u8 t=0;			//默认开启上报
+	u8 key;
+	float pitch,roll,yaw; 		//欧拉角
+	short aacx,aacy,aacz;		//加速度传感器原始数据
+	short gyrox,gyroy,gyroz;	//陀螺仪原始数据
+	short temp;					//温度	
+	
+	dgb_printf_safe("MPU6050 task running\r\n");
+	LCD_ShowString(30,300,200,16,16," Temp:    . C");	
+ 	LCD_ShowString(30,320,200,16,16,"Pitch:    . C");	
+ 	LCD_ShowString(30,340,200,16,16," Roll:    . C");	 
+ 	LCD_ShowString(30,360,200,16,16," Yaw :    . C");	
+	while(1)
+	{
+		if(mpu_dmp_get_data(&pitch,&roll,&yaw)==0)
+		{ 
+			temp=MPU_Get_Temperature();	//得到温度值
+			res = MPU_Get_Accelerometer(&aacx,&aacy,&aacz);	//得到加速度传感器数据
+			printf("res_1: %d \r\n",res);
+			res =MPU_Get_Gyroscope(&gyrox,&gyroy,&gyroz);	//得到陀螺仪数据
+			printf("res_2: %d \r\n",res);
+			if(temp<0)
+			{
+				LCD_ShowChar(30+48,300,'-',16,0);		//显示负号
+				temp=-temp;		//转为正数
+			}
+			else LCD_ShowChar(30+48,300,' ',16,0);		//去掉负号 
+			LCD_ShowNum(30+48+8,300,temp/100,3,16);		//显示整数部分	    
+			LCD_ShowNum(30+48+40,300,temp%10,1,16);		//显示小数部分 
+			
+			temp=pitch*10;
+			if(temp<0)
+			{
+				LCD_ShowChar(30+48,320,'-',16,0);		//显示负号
+				temp=-temp;		//转为正数
+			}
+			else LCD_ShowChar(30+48,320,' ',16,0);		//去掉负号 
+			LCD_ShowNum(30+48+8,320,temp/10,3,16);		//显示整数部分	    
+			LCD_ShowNum(30+48+40,320,temp%10,1,16);		//显示小数部分 
+			
+			temp=roll*10;
+			if(temp<0)
+			{
+				LCD_ShowChar(30+48,340,'-',16,0);		//显示负号
+				temp=-temp;		//转为正数
+			}
+			else LCD_ShowChar(30+48,340,' ',16,0);		//去掉负号 
+			LCD_ShowNum(30+48+8,340,temp/10,3,16);		//显示整数部分	    
+			LCD_ShowNum(30+48+40,340,temp%10,1,16);		//显示小数部分 
+			
+			temp=yaw*10;
+			if(temp<0)
+			{
+				LCD_ShowChar(30+48,360,'-',16,0);		//显示负号
+				temp=-temp;		//转为正数
+			}
+			else LCD_ShowChar(30+48,360,' ',16,0);		//去掉负号 
+			LCD_ShowNum(30+48+8,360,temp/10,3,16);		//显示整数部分	    
+			LCD_ShowNum(30+48+40,360,temp%10,1,16);		//显示小数部分  
+			
+		}
+		delay_ms(2000);			//延时500ms
+		
+	}
+}
+
+
+
+//任务15.系统内存占用监视
 void TASK_STA_task(void *p_arg)
 {
 	OS_ERR err;  
@@ -1261,13 +1391,13 @@ void TASK_STA_task(void *p_arg)
 	}
 }
 
-//任务15.浮点测试任务
+//任务16.浮点测试任务
 void float_task(void *p_arg)
 {
 	OS_ERR err; 
 	CPU_SR_ALLOC();
 	static float float_num=0.01;
-char node_message[16] = {0};
+	char node_message[16] = {0};
 	while(1)
 	{
 		float_num+=0.01f;
@@ -1282,7 +1412,7 @@ char node_message[16] = {0};
 		OLED_ShowString(0,0,(uint8_t *)node_message,16);
 		OSMutexPost(&g_mutex_oled,OS_OPT_NONE,&err);
 		
-		delay_ms(10000);			//延时500ms
+		delay_ms(6000);			//延时500ms
 		
 	}
 }
