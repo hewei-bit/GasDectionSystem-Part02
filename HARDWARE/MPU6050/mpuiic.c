@@ -17,7 +17,8 @@
 void MPU_IIC_Delay(void)
 {
 	delay_us(2);
-}
+}        
+
 
 //≥ı ºªØIIC
 void MPU_IIC_Init(void)

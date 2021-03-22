@@ -39,8 +39,8 @@ void usart2_init(u32 bound)
 
     //Usart2 NVIC 配置
     NVIC_InitStructure.NVIC_IRQChannel = USART2_IRQn;
-    NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 3; //抢占优先级3
-    NVIC_InitStructure.NVIC_IRQChannelSubPriority = 3;        //子优先级3
+    NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 2; //抢占优先级3
+    NVIC_InitStructure.NVIC_IRQChannelSubPriority = 2;        //子优先级3
     NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;           //IRQ通道使能
     NVIC_Init(&NVIC_InitStructure);                           //根据指定的参数初始化VIC寄存器
 
@@ -55,6 +55,7 @@ void usart2_init(u32 bound)
 
     USART_Init(USART2, &USART_InitStructure);      //初始化串口2
     USART_ITConfig(USART2, USART_IT_RXNE, ENABLE); //开启串口接受中断
+
     USART_Cmd(USART2, ENABLE);                     //使能串口2
 }
 
@@ -63,7 +64,7 @@ void USART2_IRQHandler(void) //串口2中断服务程序
 {
     u8 Res;
     OS_ERR err;
-
+uint8_t ucTemp;
     int len = 0;
     int t = 0;
 
@@ -74,6 +75,9 @@ void USART2_IRQHandler(void) //串口2中断服务程序
 
     if (USART_GetITStatus(USART2, USART_IT_RXNE) != RESET) //接收中断(接收到的数据必须是0x0d 0x0a结尾)
     {
+		
+		USART_ClearITPendingBit(USART2,USART_IT_RXNE);
+
         Res = USART_ReceiveData(USART2); //读取接收到的数据
 
         if ((USART2_RX_STA & 0x8000) == 0) //接收未完成
@@ -99,7 +103,15 @@ void USART2_IRQHandler(void) //串口2中断服务程序
             }
         }
     }
-
+	
+	if(USART_GetFlagStatus(USART2,USART_FLAG_ORE) == SET) // 检查 ORE 标志
+	{
+		USART_ClearITPendingBit(USART2,USART_FLAG_ORE);
+		USART_ReceiveData(USART2);
+	}
+	
+	
+	
 #if 1 //发送消息队列
     if (USART2_RX_STA & 0x8000)
     {     
@@ -115,7 +127,12 @@ void USART2_IRQHandler(void) //串口2中断服务程序
             dgb_printf_safe("[USART2_IRQHandler]OSQPost error code %d\r\n", err);
         }	
     }
-#endif
+#endif	
+	
+	
+
+
+
 	
 #ifdef SYSTEM_SUPPORT_OS
     OSIntExit();

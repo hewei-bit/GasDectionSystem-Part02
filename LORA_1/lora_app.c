@@ -31,6 +31,10 @@ NVIC_InitTypeDef NVIC_InitStructure;
 
 //设备工作模式(用于记录设备状态)
 u8 Lora_mode = 0; //0:配置模式 1:接收模式 2:发送模式
+u8 set_Already = 0; //
+
+
+
 //记录中断状态
 static u8 Int_mode = 0; //0:关闭 1:上升沿 2:下降沿
 
@@ -249,10 +253,8 @@ void LoRa_SendData(void)
 
     if (My_LoRa_CFG.mode_sta == LORA_STA_Tran) //透明传输
     {
-        sprintf((char *)Tran_Data, "ATK-LORA-01 TEST %d", num);
+        sprintf((char *)Tran_Data, "NODE15 TEST %d", num);
         u3_printf("%s\r\n", Tran_Data);
-        //LCD_Fill(0, 195, 240, 220, WHITE);         //清除显示
-        //Show_Str_Mid(10, 195, Tran_Data, 16, 240); //显示发送的数据
 
         num++;
         if (num == 255)
@@ -282,9 +284,6 @@ void LoRa_SendData(void)
         //将十六进制的数据转化为字符串打印在lcd_buff数组
         sprintf((char *)wlcd_buff, "%x %x %x %x %x %x %x %x",
                 date[0], date[1], date[2], date[3], date[4], date[5], date[6], date[7]);
-
-        //LCD_Fill(0, 200, 240, 230, WHITE);         //清除显示
-        //Show_Str_Mid(10, 200, wlcd_buff, 16, 240); //显示发送的数据
 
         Dire_Date[4]++; //Dire_Date[4]数据更新
     }
